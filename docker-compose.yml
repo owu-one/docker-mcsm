@@ -1,0 +1,30 @@
+version: "3"
+
+services:
+  mcsm-web:
+    container_name: mcsm-web
+    image: ghcr.io/owu-one/mcsm-web:main
+    network_mode: "host"
+    restart: always
+    environment:
+    - PUID=0
+    - PGID=0
+    - UMASK=022
+    volumes:
+    - ./web/data:${INSTALL_PATH-/opt/docker-mcsm}/releases/web/data
+    - ./web/logs:${INSTALL_PATH-/opt/docker-mcsm}/releases/web/logs
+    - ./daemon/data/Config:${INSTALL_PATH-/opt/docker-mcsm}/releases/daemon/data/Config:ro
+
+  mcsm-daemon:
+    container_name: mcsm-daemon
+    image: ghcr.io/owu-one/mcsm-daemon:main
+    network_mode: "host"
+    restart: always
+    environment:
+      - PUID=0
+      - PGID=0
+      - UMASK=022
+    volumes:
+      - ./daemon/data:${INSTALL_PATH-/opt/docker-mcsm}/releases/daemon/data
+      - ./daemon/logs:${INSTALL_PATH-/opt/docker-mcsm}/releases/daemon/logs
+      - /var/run/docker.sock:/var/run/docker.sock:ro
