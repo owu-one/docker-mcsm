@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: '0 19 * * *'
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'daemon/**'
 
 permissions:
   contents: read
@@ -22,79 +27,66 @@ jobs:
     runs-on: [self-hosted, "${{ matrix.label }}"]
 
     steps:
-      - uses: actions/checkout@v3
-      - uses: docker/setup-qemu-action@v2
-      - uses: docker/setup-buildx-action@v2
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
 
       - name: Log in to the Github Container registry
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-        
-      - uses: docker/metadata-action@v4
-        id: meta
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/mcsm-daemon
 
-      - uses: docker/build-push-action@v4
+      - uses: docker/build-push-action@v5
         id: build
         with:
           context: "{{defaultContext}}:daemon"
           platforms: ${{ matrix.platform }}
-          labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=ghcr.io/${{ github.repository_owner }}/mcsm-daemon,push-by-digest=true,name-canonical=true,push=true
+          provenance: false # https://github.com/docker/build-push-action/issues/755, https://github.com/orgs/community/discussions/45969
+          sbom: false
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/mcsm-daemon:${{ matrix.label }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      
-
-      - name: Export digest
-        run: |
-          rm -rf /tmp/digests
-          mkdir -p /tmp/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "/tmp/digests/${digest#sha256:}"
-      
-      - name: Upload digest
-        uses: actions/upload-artifact@v3
-        with:
-          name: digests
-          path: /tmp/digests/*
-          if-no-files-found: error
-          retention-days: 1
 
   merge:
     runs-on: ubuntu-latest
     needs: build
     steps:
-      - name: Download digests
-        uses: actions/download-artifact@v3
-        with:
-          name: digests
-          path: /tmp/digests
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v4
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/mcsm-daemon
-
       - name: Log in to the Github Container registry
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create manifest list and push
-        working-directory: /tmp/digests
+      - name: Merge manifests
         run: |
-          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf 'ghcr.io/${{ github.repository_owner }}/mcsm-daemon@sha256:%s ' *)
-      - name: Inspect image
+          docker manifest create ghcr.io/${{ github.repository_owner }}/mcsm-daemon:latest \
+            ghcr.io/${{ github.repository_owner }}/mcsm-daemon:amd64 \
+            ghcr.io/${{ github.repository_owner }}/mcsm-daemon:arm
+          docker manifest push ghcr.io/${{ github.repository_owner }}/mcsm-daemon:latest
+  
+  mirror:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Log in to the Github Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Login to Aliyun Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ALIYUN_REGISTRY }}
+          username: ${{ secrets.ALIYUN_USERNAME }}
+          password: ${{ secrets.ALIYUN_PASSWORD }}
+
+      - name: Push to Aliyun Container Registry
         run: |
-          docker buildx imagetools inspect ghcr.io/${{ github.repository_owner }}/mcsm-daemon:${{ steps.meta.outputs.version }}
+          docker pull ghcr.io/${{ github.repository_owner }}/mcsm-daemon:latest
+          docker tag ghcr.io/${{ github.repository_owner }}/mcsm-daemon:latest ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/mcsm-daemon:latest
+          docker push ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/mcsm-daemon:latest
